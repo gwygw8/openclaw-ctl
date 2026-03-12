@@ -776,6 +776,9 @@ PY
 		openclaw onboard --install-daemon
 		_sed_i 's|"profile": "messaging"|"profile": "full"|g' ~/.openclaw/openclaw.json
 		configure_openclaw_session_policy
+		if ! is_macos; then
+			systemctl --user enable openclaw-gateway.service 2>/dev/null || true
+		fi
 		start_gateway
 	}
 
@@ -2993,6 +2996,75 @@ EOF
 		done
 	}
 
+	_autostart_status() {
+		if is_macos; then
+			local plist="$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
+			if [[ ! -f "$plist" ]]; then
+				echo "未安装"
+				return
+			fi
+			if launchctl list 2>/dev/null | grep -q "ai.openclaw.gateway"; then
+				echo "已开启"
+			else
+				echo "已关闭"
+			fi
+		else
+			if systemctl --user is-enabled --quiet openclaw-gateway.service 2>/dev/null; then
+				echo "已开启"
+			else
+				echo "已关闭"
+			fi
+		fi
+	}
+
+	toggle_autostart() {
+		local status; status=$(_autostart_status)
+		clear
+		ui_header "开机自启动管理"
+		echo -e "  当前状态：\033[1m${status}\033[0m"
+		echo
+
+		local action
+		if [[ "$status" == "已开启" ]]; then
+			action=$(gum choose --cursor "❯ " \
+				--header $'  ↑↓ 移动 · Enter 确认 · q 取消' \
+				"关闭自启动" \
+				"取消") || return 0
+		else
+			action=$(gum choose --cursor "❯ " \
+				--header $'  ↑↓ 移动 · Enter 确认 · q 取消' \
+				"开启自启动" \
+				"取消") || return 0
+		fi
+
+		case "$action" in
+			"开启自启动")
+				if is_macos; then
+					local plist="$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
+					if [[ ! -f "$plist" ]]; then
+						gum spin --spinner globe --title "正在安装服务..." -- \
+							bash -c "openclaw gateway install 2>/dev/null; sleep 1"
+					fi
+					launchctl load "$plist" 2>/dev/null && ui_ok "已开启开机自启动" || ui_err "操作失败"
+				else
+					systemctl --user enable openclaw-gateway.service 2>/dev/null \
+						&& ui_ok "已开启开机自启动" || ui_err "操作失败"
+				fi
+				;;
+			"关闭自启动")
+				if is_macos; then
+					local plist="$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist"
+					launchctl unload "$plist" 2>/dev/null && ui_ok "已关闭开机自启动" || ui_err "操作失败"
+				else
+					systemctl --user disable openclaw-gateway.service 2>/dev/null \
+						&& ui_ok "已关闭开机自启动" || ui_err "操作失败"
+				fi
+				;;
+			*) return 0 ;;
+		esac
+		break_end
+	}
+
 	update_moltbot() {
 		install_node_and_tools
 		if is_macos; then
@@ -3181,6 +3253,9 @@ EOF
 		echo
 
 		local choice
+		local autostart_label
+		autostart_label="开机自启动 [$(_autostart_status)]"
+
 		choice=$(gum choose \
 			--height 24 \
 			--cursor "❯ " \
@@ -3190,6 +3265,7 @@ EOF
 			"启动" \
 			"停止" \
 			"状态日志查看" \
+			"$autostart_label" \
 			"换模型" \
 			"API管理" \
 			"CLIProxyAPI 管理" \
@@ -3212,6 +3288,7 @@ EOF
 			"启动")         start_bot ;;
 			"停止")         stop_bot ;;
 			"状态日志查看") view_logs ;;
+			"开机自启动 ["*"]") toggle_autostart ;;
 			"换模型")       change_model ;;
 		"API管理")           openclaw_api_manage_menu ;;
 		"CLIProxyAPI 管理") cliproxyapi_manage_menu ;;
